@@ -1,115 +1,44 @@
-#!/usr/bin/env python3
-# Sweely - Advanced Network Traffic Monitor with Logging
-# Developed by: Security Analyst
-
-import scapy.all as scapy
-import threading
-import time
+import argparse
 import pyttsx3
+from scapy.all import sniff, IP, TCP, UDP
+import threading
 
-# إعداد محرك الصوت للتنبيه
+# Initialize text-to-speech engine once
 engine = pyttsx3.init()
-engine.setProperty("rate", 150)  # سرعة الكلام
-engine.setProperty("volume", 1.0)  # مستوى الصوت
+engine.setProperty('rate', 150)
 
-# رسالة الطوارئ
-ALERT_MESSAGE = "This is not a test. This is an emergency in the system."
-
-# ملف تسجيل
-LOG_FILE = "sweely_log.txt"
-
-# قائمة لتخزين الاتصالات المشبوهة
-suspicious_ips = {}
-
-# حدود التهديد
-THRESHOLD = 50
-
-
-def log_event(message):
-    """تسجيل الأحداث في ملف نصي"""
-    with open(LOG_FILE, "a") as f:
-        f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {message}\n")
-
+# Lock to avoid multiple threads speaking at the same time
+lock = threading.Lock()
 
 def play_alert():
-    """تشغيل تنبيه صوتي"""
-    engine.say(ALERT_MESSAGE)
-    engine.runAndWait()
+    with lock:
+        engine.say("This is not a test, this is an emergency in the system")
+        engine.runAndWait()
 
+def packet_callback(packet):
+    if IP in packet:
+        src_ip = packet[IP].src
+        dst_ip = packet[IP].dst
+        protocol = "OTHER"
 
-def analyze_packet(packet):
-    """تحليل الحزم الملتقطة"""
-    if packet.haslayer(scapy.IP):
-        src_ip = packet[scapy.IP].src
-        dst_ip = packet[scapy.IP].dst
+        if TCP in packet:
+            protocol = "TCP"
+        elif UDP in packet:
+            protocol = "UDP"
 
-        suspicious_ips[src_ip] = suspicious_ips.get(src_ip, 0) + 1
+        print(f"[!!!] Potential attack detected from {src_ip}")
+        print(f"[{protocol}] {src_ip} -> {dst_ip} | Port: {packet[IP].sport if TCP in packet or UDP in packet else 'N/A'}")
 
-        if suspicious_ips[src_ip] > THRESHOLD:
-            alert_msg = f"[!!!] Potential attack detected from {src_ip} ({suspicious_ips[src_ip]} packets)"
-            print(alert_msg)
-            log_event(alert_msg)
-            threading.Thread(target=play_alert, daemon=True).start()
-
-        if packet.haslayer(scapy.TCP):
-            msg = f"[TCP] {src_ip} -> {dst_ip} | Port: {packet[scapy.TCP].dport}"
-            print(msg)
-            log_event(msg)
-        elif packet.haslayer(scapy.UDP):
-            msg = f"[UDP] {src_ip} -> {dst_ip} | Port: {packet[scapy.UDP].dport}"
-            print(msg)
-            log_event(msg)
-
-
-def reset_counter():
-    """إعادة تعيين العدّ كل دقيقة"""
-    global suspicious_ips
-    while True:
-        time.sleep(60)
-        suspicious_ips = {}
-
-
-def detect_interface():
-    """اختيار واجهة الشبكة تلقائياً"""
-    interfaces = scapy.get_if_list()
-    if not interfaces:
-        raise Exception("No network interfaces found!")
-
-    print("\n[*] Available interfaces:")
-    for i, iface in enumerate(interfaces):
-        print(f"  {i + 1}. {iface}")
-
-    choice = input("\nSelect interface (default=1): ")
-    try:
-        idx = int(choice) - 1
-        return interfaces[idx]
-    except:
-        return interfaces[0]
-
+        # Trigger alert sound in a separate thread
+        threading.Thread(target=play_alert).start()
 
 def main():
-    print("""
-     ███████╗██╗    ██╗███████╗███████╗██╗  ██╗   ██╗
-     ██╔════╝██║    ██║██╔════╝██╔════╝██║  ╚██╗ ██╔╝
-     ███████╗██║ █╗ ██║█████╗  █████╗  ██║   ╚████╔╝ 
-     ╚════██║██║███╗██║██╔══╝  ██╔══╝  ██║    ╚██╔╝  
-     ███████║╚███╔███╔╝███████╗██║     ███████╗██║   
-     ╚══════╝ ╚══╝╚══╝ ╚══════╝╚═╝     ╚══════╝╚═╝   
+    parser = argparse.ArgumentParser(description="Network Intrusion Detection Tool")
+    parser.add_argument("-i", "--interface", required=True, help="Network interface to sniff on")
+    args = parser.parse_args()
 
-     Sweely - Real-Time Network Threat Monitor
-     Version 4.0 | By Security Researcher
-    """)
-
-    # تشغيل عداد التصفير
-    threading.Thread(target=reset_counter, daemon=True).start()
-
-    # كشف الواجهة
-    iface = detect_interface()
-    print(f"\n[*] Monitoring network traffic on interface: {iface}\n")
-    log_event(f"Started monitoring on {iface}")
-
-    scapy.sniff(iface=iface, store=False, prn=analyze_packet)
-
+    print(f"[*] Starting network monitoring on {args.interface}...")
+    sniff(iface=args.interface, prn=packet_callback, store=False)
 
 if __name__ == "__main__":
     main()
